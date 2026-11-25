@@ -292,6 +292,7 @@ let isMyTurn=false; // 是否輪到我玩
 let myRounds=[];   // [{score, win}]
 let oppRounds=[];
 let currentRound=1;
+let pendingRound=1; // 用於 your_turn 按鈕
 let myTotalScore=0;
 let oppTotalScore=0;
 
@@ -346,10 +347,16 @@ function loop(){
   if(gState==='playing')tick();
   draw();
   // 廣播自己位置給對方（每2幀）
-  if(frames%2===0&&socket&&socket.connected&&gState!=='idle'){
+  if(frames%2===0&&socket&&socket.connected&&isMyTurn&&gState==='playing'){
     const topY=platforms[platforms.length-1]?.y||0;
     const ht=Math.max(0,Math.min(100,Math.round(100*(1-(pl.y-topY)/(CH()-topY)))));
-    socket.emit('pos',{x:Math.round(pl.x),y:Math.round(pl.y),dir:pl.dir,score,lives,level,ht,isPlaying:isMyTurn,nick:myNick,cw:CW(),ch:CH()});
+    // 廣播角色位置 + 桶子 + 火焰（讓對方看到完整畫面）
+    socket.emit('pos',{
+      x:Math.round(pl.x),y:Math.round(pl.y),dir:pl.dir,
+      score,lives,level,ht,nick:myNick,cw:CW(),ch:CH(),
+      barrels:barrels.map(b=>({x:Math.round(b.x),y:Math.round(b.y),vx:b.vx,f:b.f})),
+      flames:flames.map(f=>({x:Math.round(f.x),y:Math.round(f.y),vx:f.vx,f:f.f}))
+    });
   }
 }
 
@@ -685,13 +692,30 @@ function connectSocket(){
   // 收到對方位置（即時顯示）
   socket.on('pos',data=>{
     if(data.nick===myNick)return;
-    // 把對方位置縮放到我的 canvas 尺寸
     const sx=CW()/(data.cw||CW());
     const sy=CH()/(data.ch||CH());
+
+    // 更新對方角色位置
     oppPl.x=data.x*sx;
     oppPl.y=data.y*sy;
     oppPl.dir=data.dir||1;
     oppPl.visible=true;
+
+    // 觀看模式：同步對方的桶子和火焰位置
+    if(!isMyTurn&&data.barrels){
+      barrels=data.barrels.map(b=>({
+        x:b.x*sx,y:b.y*sy,
+        w:19,h:19,
+        vx:b.vx,vy:0,f:b.f||0
+      }));
+    }
+    if(!isMyTurn&&data.flames){
+      flames=data.flames.map(f=>({
+        x:f.x*sx,y:f.y*sy,
+        vx:f.vx,f:f.f||0
+      }));
+    }
+
     // 更新對方分數
     document.getElementById('p2Score').textContent=(data.score||0)+oppTotalScore;
     document.getElementById('p2Detail').textContent=`本輪 ${data.score||0} 分 · ${data.lives||0} 命`;
@@ -712,9 +736,11 @@ function connectSocket(){
     if(currentRound>TOTAL_ROUNDS){
       checkMatchEnd();return;
     }
+    // 用全域變數，不用inline數字
+    pendingRound=currentRound;
     showOv('👆','換你了！',
-      `${data.from} 本輪結束\n輪到你上場了！`,
-      `<button class="btn btn-red" onclick="startMyTurn(${currentRound})">▶ 開始第 ${currentRound} 輪！</button>`);
+      `${data.from} 本輪結束\n輪到你上場第 ${currentRound} 輪！`,
+      `<button class="btn btn-red" onclick="startMyTurn(pendingRound)">▶ 開始第 ${currentRound} 輪！</button>`);
   });
 
   // 聊天
